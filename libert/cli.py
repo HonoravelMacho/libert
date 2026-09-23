@@ -9,7 +9,7 @@ from pathlib import Path
 
 from libert import __version__
 from libert.downloader import download_file, filename_for, get_downloads_dir
-from libert.scraper import get_book_info, new_session, resolve_download_url
+from libert.scraper import get_book_info, new_session, normalize_book_url, resolve_download_url
 
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
@@ -90,6 +90,13 @@ def download_single(
 
     session = session or new_session()
 
+    # Aceita URL de download colada direto (/slow_download/<md5>/...):
+    # converte para a página do livro antes de processar.
+    normalized = normalize_book_url(url, session=session)
+    if normalized != url:
+        print("[+] URL de download detectada, localizando a página do livro...")
+        url = normalized
+
     print("[+] Conectando ao welib...")
     book = get_book_info(url, session=session)
 
@@ -165,6 +172,8 @@ def read_pasted_urls() -> list[str]:
 
 def process_batch(urls: list[str], fmt: str | None = None, output_dir: str | Path | None = None) -> tuple[int, int]:
     """Baixa N livros em sequência. Retorna (sucessos, falhas)."""
+    import time as _time
+
     total = len(urls)
     ok = 0
     fail = 0
@@ -185,6 +194,9 @@ def process_batch(urls: list[str], fmt: str | None = None, output_dir: str | Pat
         except Exception as e:
             print(f"[!] Falha em {url}: {e}", file=sys.stderr)
             fail += 1
+        # Pausa educada entre livros: o welib limita o ritmo (rate-limit).
+        if i < total:
+            _time.sleep(3)
     print("-" * 50)
     print(f"[+] Resumo: {ok} baixado(s) com sucesso, {fail} falha(s) de {total}.")
     return ok, fail

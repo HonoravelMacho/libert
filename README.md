@@ -42,6 +42,10 @@ Escolha o formato desejado (1-2):
   download do welib (evita salvar HTML no lugar do PDF) e valida o
   conteúdo baixado — se o servidor devolver página em vez do livro,
   nada é salvo e o erro é mostrado.
+- URLs de download coladas direto (`.../slow_download/<md5>/...`) são
+  convertidas para a página do livro automaticamente.
+- Em lote há uma pausa curta entre livros e retentativas em espelhos,
+  pois o welib limita o ritmo de requisições.
 - Arquivos são salvos em `~/Downloads` (Linux) ou `~/storage/downloads` (Termux/Android).
 - Barra de progresso com tamanho total, porcentagem e velocidade.
 

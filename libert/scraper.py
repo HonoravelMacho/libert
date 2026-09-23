@@ -401,6 +401,47 @@ def _is_download_page_url(url: str) -> bool:
     return any(k in low for k in ("/slow_download/", "/fast_download/", "/auto_download/"))
 
 
+# Sinais de bloqueio/rate-limit da Cloudflare (às vezes vêm com HTTP 200).
+BLOCK_MARKERS = (
+    "challenge-platform",
+    "just a moment",
+    "attention required",
+    "captcha",
+    "rate limit",
+    "ratelimit",
+    "too many requests",
+    "error 1015",
+    "error code: 1015",
+    "please wait",
+    "verifying you are human",
+)
+
+
+def _looks_blocked(html: str) -> bool:
+    low = html.lower()
+    return any(m in low for m in BLOCK_MARKERS)
+
+
+def _download_page_variants(url: str) -> list[str]:
+    """Variações da mesma página de download em espelhos (para contornar 403)."""
+    m = re.match(r"(https?://)([^/]+)(/.*)?$", url)
+    if not m:
+        return [url]
+    scheme, host, path = m.group(1), m.group(2).lower(), m.group(3) or ""
+    cands = [url]
+    for h in ("welib.st", "welib.org", "pt.welib.st", "en.welib.st"):
+        if h != host:
+            cands.append(f"{scheme}{h}{path}")
+    return cands
+
+
+RATE_LIMIT_MSG = (
+    "O welib limitou o ritmo das requisições (proteção anti-robôs). "
+    "Aguarde 1-2 minutos e tente de novo — evite disparar vários downloads "
+    "em sequência muito rápida. Se persistir, abra a URL no navegador primeiro."
+)
+
+
 def resolve_download_url(
     fmt: BookFormat,
     referer: str | None = None,
@@ -416,26 +457,40 @@ def resolve_download_url(
     ``a.js-partner-download-link``). URLs já diretas (CDN, libgen, IPFS)
     são devolvidas como estão.
     """
+    import time as _time
+
     url = fmt.url
     if not _is_download_page_url(url):
         return url
 
-    headers = {"Referer": referer} if referer else None
-    try:
-        if session is not None:
-            if headers:
-                resp = session.get(url, timeout=timeout, allow_redirects=True, headers=headers)
+    resp = None
+    last_status: int | None = None
+    for attempt, cand in enumerate(_download_page_variants(url)):
+        headers = {"Referer": referer} if referer else None
+        try:
+            if session is not None:
+                resp = session.get(cand, timeout=timeout, allow_redirects=True, headers=headers or {})
             else:
-                resp = session.get(url, timeout=timeout, allow_redirects=True)
-        else:
-            resp = requests.get(url, headers={**BROWSER_HEADERS, **(headers or {})},
-                                timeout=timeout, allow_redirects=True)
-    except requests.RequestException as e:
-        raise RuntimeError(f"Falha ao abrir a página de download: {e}")
-    if resp.status_code == 404:
+                resp = requests.get(cand, headers={**BROWSER_HEADERS, **(headers or {})},
+                                    timeout=timeout, allow_redirects=True)
+        except requests.RequestException as e:
+            if attempt == 0:
+                raise RuntimeError(f"Falha ao abrir a página de download: {e}")
+            continue  # tenta o próximo espelho
+        last_status = resp.status_code
+        if resp.status_code in (403, 429):
+            _time.sleep(2 * (attempt + 1))  # backoff antes do próximo espelho
+            continue
+        break
+
+    if resp is None:
+        raise RuntimeError("Falha ao abrir a página de download (sem resposta).")
+    if last_status == 404:
         raise RuntimeError("Página de download não encontrada (HTTP 404).")
-    if resp.status_code != 200:
-        raise RuntimeError(f"HTTP {resp.status_code} na página de download.")
+    if last_status in (403, 429):
+        raise RuntimeError(f"HTTP {last_status} na página de download. {RATE_LIMIT_MSG}")
+    if last_status != 200:
+        raise RuntimeError(f"HTTP {last_status} na página de download.")
 
     final = str(resp.url)
     if "/account" in final or "/login" in final:
@@ -473,8 +528,45 @@ def resolve_download_url(
         if any(k in href.lower() for k in (".pdf", ".epub", ".mobi", ".azw3", ".djvu", ".fb2", "/ipfs/")) or "download" in text:
             return href
 
+    # Sem link E com sinais de bloqueio: é rate-limit, não "layout mudou".
+    if _looks_blocked(resp.text):
+        raise RuntimeError(RATE_LIMIT_MSG)
+
     raise RuntimeError(
         "Não encontrei o link direto do arquivo na página de download. "
-        "O welib pode ter mudado o layout ou estar exigindo espera/login. "
-        "Abra a página no navegador para baixar manualmente."
+        "Se você baixou vários livros em sequência, pode ser o limite de ritmo "
+        "do welib — aguarde 1-2 minutos e tente de novo. "
+        "Se persistir, abra a página no navegador para baixar manualmente."
     )
+
+
+def normalize_book_url(url: str, session: requests.Session | None = None, timeout: int = 30) -> str:
+    """Normaliza a URL de entrada para a página do livro (/md5/<hash>).
+
+    Aceita que o usuário cole direto uma URL de download
+    (/slow_download/<md5>/..., /fast_download/<md5>/...): extrai o md5 e
+    volta para a página do livro, onde título/formatos são detectados
+    corretamente. Para /auto_download/ (sem md5 na URL), lê o md5 da página.
+    URLs de livro passam intactas.
+    """
+    u = (url or "").strip()
+    m = re.search(r"/(slow_download|fast_download)/([a-fA-F0-9]{32})", u, re.IGNORECASE)
+    if m:
+        host = re.match(r"(https?://[^/]+)", u)
+        base = host.group(1) if host else "https://welib.st"
+        return f"{base}/md5/{m.group(2).lower()}"
+    if "/auto_download/" in u.lower():
+        try:
+            if session is not None:
+                resp = session.get(u, timeout=timeout, allow_redirects=True)
+            else:
+                resp = requests.get(u, headers=BROWSER_HEADERS, timeout=timeout, allow_redirects=True)
+            if resp.status_code == 200:
+                mm = re.search(r"data-resource=['\"]md5:([a-fA-F0-9]{32})", resp.text, re.IGNORECASE)
+                if mm:
+                    host = re.match(r"(https?://[^/]+)", u)
+                    base = host.group(1) if host else "https://welib.st"
+                    return f"{base}/md5/{mm.group(1).lower()}"
+        except requests.RequestException:
+            pass
+    return u
