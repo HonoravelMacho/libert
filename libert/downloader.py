@@ -84,10 +84,18 @@ def _filename_from_response(resp: requests.Response, fallback: str) -> str:
     return fallback
 
 
+def _looks_like_html(data: bytes) -> bool:
+    head = data.lstrip()[:200].lower()
+    return head.startswith((b"<!doctype html", b"<html", b"<head", b"<title"))
+
+
 def download_file(url: str, dest: Path, referer: str | None = None, timeout: int = 60) -> Path:
     """Baixa `url` para `dest` com barra de progresso rich.
 
     Mostra tamanho total, porcentagem e velocidade instantânea.
+    Valida que o conteúdo é o arquivo real: se o servidor devolver
+    HTML (página de login/espera/erro) em vez do livro, aborta SEM salvar
+    nada e levanta RuntimeError explicativo.
     Retorna o caminho final (pode mudar via Content-Disposition).
     """
     headers = dict(BROWSER_HEADERS)
@@ -106,6 +114,16 @@ def download_file(url: str, dest: Path, referer: str | None = None, timeout: int
             raise RuntimeError("Arquivo de download não encontrado (HTTP 404).")
         resp.raise_for_status()
 
+        ctype = (resp.headers.get("Content-Type", "") or "").lower()
+        if "text/html" in ctype:
+            raise RuntimeError(
+                "O servidor devolveu uma página HTML em vez do arquivo do livro "
+                f"(Content-Type: {resp.headers.get('Content-Type')}). "
+                "Isso acontece quando o link é de uma página intermediária "
+                "(espera/login) e não do arquivo direto. Nada foi salvo. "
+                "Atualize o libert e tente de novo."
+            )
+
         total = int(resp.headers.get("Content-Length", 0) or 0)
         final_name = _filename_from_response(resp, dest.name)
         final_dest = dest.parent / final_name
@@ -119,6 +137,9 @@ def download_file(url: str, dest: Path, referer: str | None = None, timeout: int
 
         start = time.time()
         downloaded = 0
+        first_chunk = True
+        html_detected = False
+        existed_before = final_dest.exists()
         with Progress(
             "[progress.description]{task.description}",
             BarColumn(),
@@ -128,12 +149,33 @@ def download_file(url: str, dest: Path, referer: str | None = None, timeout: int
             TimeRemainingColumn(),
         ) as progress:
             task = progress.add_task(f"[cyan]Baixando {final_dest.name}", total=total or None)
-            with open(final_dest, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=1024 * 64):
-                    if not chunk:
-                        continue
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    elapsed = max(time.time() - start, 0.001)
-                    progress.update(task, advance=len(chunk))
+            try:
+                with open(final_dest, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=1024 * 64):
+                        if not chunk:
+                            continue
+                        if first_chunk:
+                            first_chunk = False
+                            if _looks_like_html(chunk):
+                                html_detected = True
+                                raise RuntimeError(
+                                    "O servidor devolveu uma página HTML em vez do arquivo do livro. "
+                                    "Isso acontece quando o link é de uma página intermediária "
+                                    "(espera/login) e não do arquivo direto. Nada foi salvo. "
+                                    "Atualize o libert e tente de novo."
+                                )
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        elapsed = max(time.time() - start, 0.001)
+                        progress.update(task, advance=len(chunk))
+            except Exception:
+                # Nunca deixa arquivo corrompido/HTML para trás (mas preserva
+                # um arquivo pré-existente do usuário).
+                if html_detected and not existed_before:
+                    try:
+                        if final_dest.exists():
+                            final_dest.unlink()
+                    except OSError:
+                        pass
+                raise
         return final_dest

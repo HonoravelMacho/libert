@@ -38,6 +38,10 @@ Escolha o formato desejado (1-2):
 
 - Com apenas 1 formato disponível, o download começa automaticamente.
 - Com `-f/--format`, o modo é não-interativo.
+- O app resolve o **link direto do arquivo** a partir da página de
+  download do welib (evita salvar HTML no lugar do PDF) e valida o
+  conteúdo baixado — se o servidor devolver página em vez do livro,
+  nada é salvo e o erro é mostrado.
 - Arquivos são salvos em `~/Downloads` (Linux) ou `~/storage/downloads` (Termux/Android).
 - Barra de progresso com tamanho total, porcentagem e velocidade.
 

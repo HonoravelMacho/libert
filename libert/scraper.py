@@ -43,6 +43,14 @@ class BookInfo:
     title: str
     formats: list[BookFormat]
     source_url: str
+    md5: str = ""  # md5 do livro (extraído da URL /md5/<hash>)
+
+
+def new_session() -> requests.Session:
+    """Sessão HTTP com headers de navegador (mantém cookies entre páginas)."""
+    s = requests.Session()
+    s.headers.update(BROWSER_HEADERS)
+    return s
 
 
 def extract_md5(url: str) -> str | None:
@@ -73,7 +81,14 @@ def candidate_urls(url: str) -> list[str]:
     return cands
 
 
-def fetch_page(url: str, timeout: int = 30) -> tuple[str, str]:
+def _http_get(url: str, session: requests.Session | None, timeout: int = 30, **kwargs):
+    """GET via sessão (se dada) ou requests direto, sempre com headers de navegador."""
+    if session is not None:
+        return session.get(url, timeout=timeout, allow_redirects=True, **kwargs)
+    return requests.get(url, headers=BROWSER_HEADERS, timeout=timeout, allow_redirects=True, **kwargs)
+
+
+def fetch_page(url: str, timeout: int = 30, session: requests.Session | None = None) -> tuple[str, str]:
     """Baixa o HTML da página do livro. Retorna (html, url_final).
 
     Tenta a URL original e espelhos. Levanta RuntimeError com mensagem
@@ -82,7 +97,7 @@ def fetch_page(url: str, timeout: int = 30) -> tuple[str, str]:
     last_err: Exception | None = None
     for cand in candidate_urls(url):
         try:
-            resp = requests.get(cand, headers=BROWSER_HEADERS, timeout=timeout, allow_redirects=True)
+            resp = _http_get(cand, session, timeout=timeout)
         except requests.RequestException as e:
             last_err = e
             continue
@@ -281,7 +296,7 @@ def extract_formats(soup: BeautifulSoup, page_url: str) -> list[BookFormat]:
         if m and ("/download" in low or "download" in text.lower() or low.startswith("https://")):
             other.append(abs_url)
 
-    ordered_urls = slow + auto + fast + libgen + ipfs + other
+    ordered_urls = slow + libgen + ipfs + auto + fast + other
     # Dedup preservando ordem.
     seen_u: set[str] = set()
     uniq_urls: list[str] = []
@@ -358,8 +373,8 @@ def extract_formats(soup: BeautifulSoup, page_url: str) -> list[BookFormat]:
     return []
 
 
-def get_book_info(url: str) -> BookInfo:
-    html, final_url = fetch_page(url)
+def get_book_info(url: str, session: requests.Session | None = None) -> BookInfo:
+    html, final_url = fetch_page(url, session=session)
     soup = BeautifulSoup(html, "html.parser")
 
     # Detecta desafio Cloudflare que passou como 200 com "Just a moment".
@@ -378,9 +393,88 @@ def get_book_info(url: str) -> BookInfo:
             "A página pode exigir login ou estar protegida. "
             "Abra a URL no navegador para verificar os downloads disponíveis."
         )
-    return BookInfo(title=title, formats=formats, source_url=final_url)
+    return BookInfo(title=title, formats=formats, source_url=final_url, md5=extract_md5(url) or "")
 
 
-def resolve_download_url(fmt: BookFormat) -> str:
-    """Por ora o href extraído já é a URL de download (segue redirects no GET)."""
-    return fmt.url
+def _is_download_page_url(url: str) -> bool:
+    low = (url or "").lower()
+    return any(k in low for k in ("/slow_download/", "/fast_download/", "/auto_download/"))
+
+
+def resolve_download_url(
+    fmt: BookFormat,
+    referer: str | None = None,
+    session: requests.Session | None = None,
+    expected_md5: str | None = None,
+    timeout: int = 30,
+) -> str:
+    """Resolve a URL final e direta do arquivo.
+
+    As páginas /slow_download/, /fast_download/ e /auto_download/ do welib
+    são páginas HTML intermediárias — NÃO são o arquivo. Esta função abre a
+    página e extrai o link direto do arquivo (ex: CDN assinado em
+    ``a.js-partner-download-link``). URLs já diretas (CDN, libgen, IPFS)
+    são devolvidas como estão.
+    """
+    url = fmt.url
+    if not _is_download_page_url(url):
+        return url
+
+    headers = {"Referer": referer} if referer else None
+    try:
+        if session is not None:
+            if headers:
+                resp = session.get(url, timeout=timeout, allow_redirects=True, headers=headers)
+            else:
+                resp = session.get(url, timeout=timeout, allow_redirects=True)
+        else:
+            resp = requests.get(url, headers={**BROWSER_HEADERS, **(headers or {})},
+                                timeout=timeout, allow_redirects=True)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Falha ao abrir a página de download: {e}")
+    if resp.status_code == 404:
+        raise RuntimeError("Página de download não encontrada (HTTP 404).")
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code} na página de download.")
+
+    final = str(resp.url)
+    if "/account" in final or "/login" in final:
+        raise RuntimeError(
+            "Este download exige login no welib (a página redirecionou para /account). "
+            "Entre na sua conta gratuita pelo navegador e tente de novo, "
+            "ou escolha a opção de download lento (slow)."
+        )
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # Garante que a página de download é do MESMO livro (evita baixar
+    # outro título quando o link é de "livros relacionados").
+    if expected_md5:
+        m = re.search(r"data-resource=['\"]md5:([a-fA-F0-9]{32})", resp.text)
+        if m and m.group(1).lower() != expected_md5.lower():
+            raise RuntimeError(
+                "O link de download não corresponde ao livro solicitado "
+                f"(md5 {m.group(1)} ≠ {expected_md5}). Abortando para não baixar o arquivo errado."
+            )
+
+    # 1. Link direto oficial ("📚 Download now").
+    a = soup.select_one("a.js-partner-download-link[href]")
+    if a and a.get("href"):
+        return urljoin(final, a["href"].strip())
+
+    # 2. Fallback: primeiro link externo (fora do welib) com cara de arquivo.
+    for cand in soup.find_all("a", href=True):
+        href = (cand.get("href") or "").strip()
+        if not href.lower().startswith("http"):
+            continue
+        if "welib" in href.lower():
+            continue
+        text = cand.get_text(" ", strip=True).lower()
+        if any(k in href.lower() for k in (".pdf", ".epub", ".mobi", ".azw3", ".djvu", ".fb2", "/ipfs/")) or "download" in text:
+            return href
+
+    raise RuntimeError(
+        "Não encontrei o link direto do arquivo na página de download. "
+        "O welib pode ter mudado o layout ou estar exigindo espera/login. "
+        "Abra a página no navegador para baixar manualmente."
+    )

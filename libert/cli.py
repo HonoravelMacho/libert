@@ -9,7 +9,7 @@ from pathlib import Path
 
 from libert import __version__
 from libert.downloader import download_file, filename_for, get_downloads_dir
-from libert.scraper import get_book_info, resolve_download_url
+from libert.scraper import get_book_info, new_session, resolve_download_url
 
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
@@ -77,14 +77,21 @@ def choose_format(formats, wanted: str | None):
         print(f"[!] Escolha inválida. Digite um número entre 1 e {n}.", file=sys.stderr)
 
 
-def download_single(url: str, fmt: str | None = None, output_dir: str | Path | None = None) -> Path:
+def download_single(
+    url: str,
+    fmt: str | None = None,
+    output_dir: str | Path | None = None,
+    session=None,
+) -> Path:
     """Fluxo padrão de um único livro. Retorna o caminho baixado. Levanta exceção em falha."""
     url = url.strip()
     if not is_valid_url(url):
         raise ValueError(f"URL inválida: {url!r}. Esperado algo como: https://pt.welib.st/md5/<hash>")
 
+    session = session or new_session()
+
     print("[+] Conectando ao welib...")
-    book = get_book_info(url)
+    book = get_book_info(url, session=session)
 
     print(f'[+] Livro encontrado: "{book.title}"')
     print("[+] Formatos disponíveis:")
@@ -100,9 +107,13 @@ def download_single(url: str, fmt: str | None = None, output_dir: str | Path | N
         print(f"[!] Erro: {e}", file=sys.stderr)
         raise
 
+    print("[+] Resolvendo link direto do arquivo...")
+    direct_url = resolve_download_url(
+        chosen, referer=book.source_url, session=session, expected_md5=book.md5 or None
+    )
     out_dir = Path(output_dir).expanduser() if output_dir else get_downloads_dir()
-    dest = out_dir / filename_for(book.title, chosen.fmt, resolve_download_url(chosen))
-    final = download_file(resolve_download_url(chosen), dest, referer=book.source_url)
+    dest = out_dir / filename_for(book.title, chosen.fmt, direct_url)
+    final = download_file(direct_url, dest, referer=book.source_url)
     print(f"[+] Download concluído: {final}")
     return final
 
@@ -157,10 +168,11 @@ def process_batch(urls: list[str], fmt: str | None = None, output_dir: str | Pat
     total = len(urls)
     ok = 0
     fail = 0
+    session = new_session()  # cookies reutilizados entre os livros do lote
     for i, url in enumerate(urls, start=1):
         print(f'[{i}/{total}] Processando: {url.strip()[:100]}...')
         try:
-            download_single(url, fmt=fmt, output_dir=output_dir)
+            download_single(url, fmt=fmt, output_dir=output_dir, session=session)
             ok += 1
         except KeyboardInterrupt:
             print("\n[!] Lote interrompido pelo usuário.", file=sys.stderr)
