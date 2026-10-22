@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "libert"
-version = "0.2.2"
-description = "CLI rápida para download de livros do welib"
+version = "0.3.0"
+description = "CLI instantânea para download de livros do welib (yt-dlp de livros)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -20,6 +20,7 @@ classifiers = [
 ]
 dependencies = [
   "requests>=2.28",
+  "cloudscraper>=1.2.71",
   "beautifulsoup4>=4.11",
   "rich>=13",
 ]

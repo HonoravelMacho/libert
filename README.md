@@ -1,6 +1,7 @@
 # libert
 
-CLI extremamente rápida e direta para download de livros do [welib](https://welib.st).
+CLI **instantânea** para download de livros do [welib](https://welib.st) — o
+"yt-dlp dos livros": cola o link (ou lista), e o livro chega em segundos.
 
 Instale via PyPI:
 
@@ -25,29 +26,38 @@ Exemplo:
 libert https://pt.welib.st/md5/55d053185d2b4871c7a0549b997135f9
 ```
 
-Fluxo no terminal (1 livro):
+## Como fica instantâneo (v0.3)
 
-```
-[+] Conectando ao welib...
-[+] Livro encontrado: "Nome do Livro"
-[+] Formatos disponíveis:
-  [1] PDF  (15.4 MB)
-  [2] EPUB (2.1 MB)
-Escolha o formato desejado (1-2):
-```
+O libert resolve o arquivo **sem esperar**, por rotas paralelas — a primeira
+que responder vale o download:
 
-- Com apenas 1 formato disponível, o download começa automaticamente.
-- Com `-f/--format`, o modo é não-interativo.
-- O app resolve o **link direto do arquivo** a partir da página de
-  download do welib (evita salvar HTML no lugar do PDF) e valida o
-  conteúdo baixado — se o servidor devolver página em vez do livro,
-  nada é salvo e o erro é mostrado.
-- URLs de download coladas direto (`.../slow_download/<md5>/...`) são
-  convertidas para a página do livro automaticamente.
-- Em lote há uma pausa curta entre livros e retentativas em espelhos,
-  pois o welib limita o ritmo de requisições.
-- Arquivos são salvos em `~/Downloads` (Linux) ou `~/storage/downloads` (Termux/Android).
-- Barra de progresso com tamanho total, porcentagem e velocidade.
+1. **CDN direta (partner)** — encontra o `js-partner-download-link`
+   (`📚 Download`) dentro das páginas `slow_download/fast_download` e baixa
+   o arquivo original imediatamente (a espera de minutos não existe: o link
+   já vem pronto no HTML); com validação anti-livro-diferente (o md5 do
+   livro precisa estar no URL do CDN);
+2. **IPFS em corrida (race)** — 10+ gateways disparados em paralelo; o
+   primeiro que devolver bytes reais (não HTML) ganha o download;
+3. **libgen** — link direto do `file.php`, último recurso.
+
+Extras de robustez:
+
+- Sessão **cloudscraper** aquecida passa o desafio Cloudflare sem browser;
+  challenge → retry espelhado e escalonado automaticamente.
+- **Rate-limit** não aborta: o libert respira (8s → 20s) e resolve de novo,
+  sozinho — você não precisa re-executar o comando.
+- **Lote em pipeline**: enquanto baixa o livro atual, o próximo já está
+  sendo resolvido em background. Zero segundo morto entre livros; sem
+  pausa fixa de 3s e sem "educar" o servidor quando ele não reclama.
+- Link partner que vira HTML (token expirado) é re-resolvido na hora.
+- Validação de conteúdo: PDF/EPUB/MOBI checados por magic bytes; se o
+  servidor devolver HTML, nada é salvo.
+- URLs de download coladas direto (`.../slow_download/<md5>/...`) viram
+  página do livro automaticamente.
+- Espelhos automáticos (`welib.org`, `welib.st`, `pt/en/es.welib.st`).
+- Arquivos salvos em `~/Downloads` (Linux) ou `~/storage/downloads` (Termux);
+  nunca sobrescreve (adiciona ` (1)`, ` (2)`…).
+- Barra de progresso com tamanho, % e velocidade.
 
 ## Menu interativo (`libert` sem argumentos)
 
@@ -62,31 +72,28 @@ Escolha o formato desejado (1-2):
 Escolha uma opção (0-3):
 ```
 
-- **Opção 1:** pede a URL e segue o fluxo padrão (auto se 1 formato, pergunta se N).
-- **Opção 2:** cole um link por linha; uma linha em branco (Enter vazio) inicia o lote.
-- **Opção 3:** informa o `.txt` (Enter = `links.txt` do diretório atual, ou seja, da pasta onde o terminal está aberto). Linhas vazias e comentários `#` são ignorados.
-
 ## Lote (batch)
 
 ```
-[1/3] Processando: https://pt.welib.st/md5/aaa...
-[+] Conectando ao welib...
+[1/3] https://pt.welib.st/md5/aaa...
+[+] Livro: "Nome do Livro"
+[+] Link direto do arquivo resolvido.
+                     Baixando Nome do Livro.pdf ━━━━━ 100% ...
+[+] Concluído em 6.4s → ~/Downloads/Nome do Livro.pdf
+[2/3] https://pt.welib.st/md5/bbb...
 ...
-[2/3] Processando: https://pt.welib.st/md5/bbb...
-...
-[+] Resumo: 2 baixado(s) com sucesso, 1 falha(s) de 3.
+[+] Resumo: 3 baixado(s) com sucesso, 0 falha(s) de 3.
 ```
-
-- 1 formato → baixa sem pausar; N formatos → pergunta o formato daquele livro.
-- Falhas de um link (URL inválida, 404/403, rede) não abortam o lote.
 
 Arquivo `.txt` de exemplo (`links.txt`):
 
 ```txt
 # meus livros
 https://pt.welib.st/md5/55d053185d2b4871c7a0549b997135f9
-https://welib.st/md5/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+https://welib.org/md5/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 ```
+
+Linhas vazias e `#` são ignoradas; texto extra antes da URL é aceito.
 
 ## Opções
 
@@ -94,6 +101,12 @@ https://welib.st/md5/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 libert [-f FORMATO] [-o PASTA] [-l ARQUIVO.txt] [URL]
 libert -V
 ```
+
+## Notas
+
+- O welib limita ritmo por IP; o libert já respeita isso de forma adaptativa
+  (sem pausas fixas) e recupera sozinho quando esbarra no limite.
+- Formatos conversão (`convert/epub`, etc.) usados quando você pede `-f`.
 
 ## Desenvolvimento
 

@@ -1,3 +1,3 @@
-"""libert - download de livros do welib via CLI."""
+"""libert - download instantâneo de livros do welib via CLI (yt-dlp de livros)."""
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
