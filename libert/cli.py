@@ -35,7 +35,6 @@ from libert.scraper import (
     resolve_partner,
     warmup,
 )
-
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
 
@@ -52,6 +51,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output-dir", dest="output_dir", default=None,
                    help="Pasta de destino (padrão: ~/Downloads).")
     p.add_argument("-V", "--version", action="store_true", help="Mostra a versão e sai.")
+    p.add_argument("--cookies", dest="cookies", default=None, metavar="cookies.txt",
+                   help="Cookie jar (Netscape ou nome=valor) do navegador com sessão "
+                        "aberta no welib — resolve bloqueios de Cloudflare no Termux.")
     return p
 
 
@@ -190,14 +192,15 @@ def download_book(url: str, fmt: str | None, out_dir: Path, http: Http) -> Path:
 
 
 def download_single(url: str, fmt: str | None = None,
-                    output_dir: str | Path | None = None) -> Path:
+                    output_dir: str | Path | None = None,
+                    cookies_file: str | None = None) -> Path:
     """Fluxo padrão de um único livro. Levanta exceção em falha."""
     url = url.strip()
     if not is_valid_url(url):
         raise ValueError(f"URL inválida: {url!r}. Esperado algo como: https://pt.welib.st/md5/<hash>")
     out_dir = Path(output_dir).expanduser() if output_dir else get_downloads_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
-    http = Http(new_session())
+    http = Http(new_session(cookies_file))
     warmup(http, normalize_book_url(url))
     t0 = time.time()
     final = download_book(url, fmt, out_dir, http)
@@ -209,14 +212,15 @@ def download_single(url: str, fmt: str | None = None,
 
 
 def process_batch(urls: list[str], fmt: str | None = None,
-                  output_dir: str | Path | None = None) -> tuple[int, int]:
+                  output_dir: str | Path | None = None,
+                  cookies_file: str | None = None) -> tuple[int, int]:
     """Pipeline: enquanto baixa o livro atual, o próximo já está sendo resolvido."""
     total = len(urls)
     ok = 0
     fail = 0
     out_dir = Path(output_dir).expanduser() if output_dir else get_downloads_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
-    http = Http(new_session())
+    http = Http(new_session(cookies_file))
 
     def pre(u: str):
         u = normalize_book_url(u)
@@ -334,7 +338,8 @@ MENU_TEXT = """=== libert - Gerenciador de Downloads do welib ===
 """
 
 
-def run_menu(fmt: str | None = None, output_dir: str | Path | None = None) -> int:
+def run_menu(fmt: str | None = None, output_dir: str | Path | None = None,
+             cookies: str | None = None) -> int:
     while True:
         print(MENU_TEXT)
         try:
@@ -354,7 +359,7 @@ def run_menu(fmt: str | None = None, output_dir: str | Path | None = None) -> in
             if not url:
                 continue
             try:
-                download_single(url, fmt=fmt, output_dir=output_dir)
+                download_single(url, fmt=fmt, output_dir=output_dir, cookies_file=cookies)
                 return 0
             except KeyboardInterrupt:
                 print("\n[!] Operação cancelada.", file=sys.stderr)
@@ -375,7 +380,7 @@ def run_menu(fmt: str | None = None, output_dir: str | Path | None = None) -> in
             if not urls:
                 print("[!] Nenhum link válido informado.", file=sys.stderr)
                 continue
-            ok, fail = process_batch(urls, fmt=fmt, output_dir=output_dir)
+            ok, fail = process_batch(urls, fmt=fmt, output_dir=output_dir, cookies_file=cookies)
             return 0 if fail == 0 else 1
         else:
             print("[!] Opção inválida. Escolha entre 0 e 3.", file=sys.stderr)
@@ -398,14 +403,16 @@ def main(argv: list[str] | None = None) -> int:
         if not urls:
             print(f"[!] Nenhuma URL válida encontrada em {args.list_file}.", file=sys.stderr)
             return 1
-        ok, fail = process_batch(urls, fmt=args.fmt, output_dir=args.output_dir)
+        ok, fail = process_batch(urls, fmt=args.fmt, output_dir=args.output_dir,
+                                 cookies_file=args.cookies)
         return 0 if fail == 0 else 1
 
     if not args.url:
-        return run_menu(fmt=args.fmt, output_dir=args.output_dir)
+        return run_menu(fmt=args.fmt, output_dir=args.output_dir, cookies=args.cookies)
 
     try:
-        download_single(args.url, fmt=args.fmt, output_dir=args.output_dir)
+        download_single(args.url, fmt=args.fmt, output_dir=args.output_dir,
+                        cookies_file=args.cookies)
         return 0
     except KeyboardInterrupt:
         print("\n[!] Operação cancelada.", file=sys.stderr)

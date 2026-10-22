@@ -26,6 +26,32 @@ Exemplo:
 libert https://pt.welib.st/md5/55d053185d2b4871c7a0549b997135f9
 ```
 
+## Termux / Cloudflare travando tudo
+
+Quando o welib desafia o Cloudflare em todas as tentativas (comum em
+redes IPs compartilhadas/celular), o libert acusa exatamente isso e
+aceita os **cookies do seu próprio navegador**:
+
+1. No navegador (desktop ou Android), abra `https://welib.org` uma vez
+   (passa o "Just a moment..." normalmente);
+2. Exporte os cookies para `cookies.txt` — formato Netscape (extensões
+   tipo *Cookie-Editor* / *Get cookies.txt*) **ou** só as linhas
+   `nome=valor` (ex: `cf_clearance=...`);
+3. Rode:
+
+```bash
+libert --cookies cookies.txt <URL_DO_WELIB>
+libert --cookies cookies.txt -l links.txt
+```
+
+No Termux o libert já usa perfil de navegador Android automaticamente.
+
+## Fallbacks
+
+- **IPFS em corrida (race)** — 10+ gateways disparados em paralelo; o
+  primeiro que devolver bytes reais (não HTML) ganha o download;
+- **libgen** — link direto do `file.php`, último recurso.
+
 ## Como fica instantâneo (v0.3)
 
 O libert resolve o arquivo **sem esperar**, por rotas paralelas — a primeira

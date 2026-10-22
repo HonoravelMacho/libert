@@ -60,14 +60,74 @@ def is_challenge(html: str) -> bool:
     return any(m in head for m in CHALLENGE_MARKERS)
 
 
-def new_session():
-    """Sessão com bypass de Cloudflare quando cloudscraper está presente."""
+def new_session(cookies_file: str | None = None):
+    """Sessão com bypass de Cloudflare (cloudscraper) e perfil Android no Termux.
+
+    `cookies_file`: cookie jar user-friendly — Netscape (export de extensões
+    tipo Cookie-Editor / curl -c) ou linhas 'nome=valor'.
+    """
+    import os
+
+    in_termux = bool(os.environ.get("TERMUX_VERSION"))
     if _cloudscraper is not None:
-        s = _cloudscraper.create_scraper()
+        if in_termux:
+            s = _cloudscraper.create_scraper(
+                browser={"browser": "chrome", "platform": "android", "mobile": True, "desktop": False}
+            )
+        else:
+            s = _cloudscraper.create_scraper()
     else:
         s = requests.Session()
     s.headers.update(BROWSER_HEADERS)
+    if cookies_file:
+        _load_cookies(s, cookies_file)
     return s
+
+
+def _load_cookies(s, cookies_file: str) -> int:
+    """Carrega cookies (Netscape ou nome=valor) na sessão."""
+    import http.cookiejar
+    from pathlib import Path
+
+    p = Path(cookies_file).expanduser()
+    if not p.exists():
+        raise RuntimeError(f"Arquivo de cookies não encontrado: {p}")
+    text = p.read_text(encoding="utf-8", errors="ignore")
+    loaded = 0
+    if text.lstrip().startswith("# Netscape"):
+        try:
+            jar = http.cookiejar.MozillaCookieJar(str(p))
+            jar.load(str(p), ignore_discard=True, ignore_expires=True)
+            for c in jar:
+                s.cookies.set_cookie(c)
+                loaded += 1
+            return loaded
+        except http.cookiejar.LoadError:
+            pass  # cai no parser manual abaixo
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.lower().startswith("#httponly_"):
+            line = line[10:]
+        # Netscape manual: domain \t flag \t path \t secure \t expires \t name \t value
+        parts = line.split("\t")
+        if len(parts) >= 7:
+            domain, _, path, secure, expires, name, value = parts[:7]
+            c = http.cookiejar.Cookie(
+                0, name, value, None, False,
+                domain, bool(domain.startswith(".")), bool(domain.startswith(".")),
+                path, True, secure.lower() == "true",
+                int(expires) if expires.isdigit() else None, False, None, None, {},
+            )
+            s.cookies.set_cookie(c)
+            loaded += 1
+            continue
+        m = re.match(r"([A-Za-z0-9_.-]+)\s*=\s*(.*)", line)
+        if m:
+            s.cookies.set(m.group(1), m.group(2), domain=".welib.org")
+            loaded += 1
+    return loaded
 
 
 @dataclass
@@ -115,7 +175,7 @@ class Http:
     def get(self, url: str, tries: int = 4, timeout: int = 30, referer: str | None = None, **kw):
         host = urlparse(url).netloc.lower()
         parsed = urlparse(url)
-        last = None
+        last: str = ""
         for attempt in range(tries):
             try:
                 if self._lock:
@@ -124,12 +184,17 @@ class Http:
                 else:
                     r = self.s.get(url, timeout=timeout, allow_redirects=True, headers=({"Referer": referer} if referer else None), **kw)
             except requests.RequestException as e:
-                last = e
+                last = f"erro de rede: {e}"
                 time.sleep(random.uniform(0.4, 1.0) * (attempt + 1))
                 continue
             if is_challenge(r.text):
                 self.challenges += 1
-                self._cb("[!] Cloudflare: aguardando desafio passar...")
+                last = (
+                    "Cloudflare desafiou todas as tentativas de acesso. "
+                    "Use --cookies arquivo.txt (cookies do seu navegador com "
+                    "sessão aberta no welib) ou rode em outra rede."
+                )
+                self._cb(f"[!] Cloudflare: tentativa {attempt + 1}/{tries} desafiada...")
                 time.sleep(random.uniform(0.8, 1.6) * (attempt + 1))
                 # Troca de host para bater em outro painel do Cloudflare.
                 for h in HOSTS:
@@ -140,13 +205,14 @@ class Http:
                 continue
             if r.status_code in (403, 429):
                 self.challenges += 1
+                last = f"HTTP {r.status_code} (rate-limit) em {host}"
                 time.sleep(random.uniform(1.0, 2.0) * (attempt + 1))
                 continue
             if r.status_code < 500:
                 return r
-            last = RuntimeError(f"HTTP {r.status_code}")
+            last = f"HTTP {r.status_code} em {host}"
             time.sleep(random.uniform(0.6, 1.2))
-        raise RuntimeError(str(last) or "Falha de rede ao acessar o welib")
+        raise RuntimeError(last or "Falha de rede ao acessar o welib")
 
 
 def extract_md5(url: str) -> str | None:
