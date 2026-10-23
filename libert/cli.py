@@ -257,7 +257,6 @@ def download_book(url: str, fmt: str | None, out_dir: Path, http: Http,
             try:
                 # Novo fetch da página do livro: o estado do welib muda com o tempo.
                 book = get_book_info(book.source_url, http)
-                say(f'[+] Livro: "{book.title}"')
             except RuntimeError:
                 pass
         try:
@@ -344,9 +343,9 @@ def _book_job(idx: int, url: str, fmt: str | None, out_dir: Path,
         return final
     except Exception as e:
         msg = str(e) or type(e).__name__
-        phase(f"✗ Falha: {msg[:60]}")
+        phase("✗ Falhou")
         progress.console.print(f"[red]#{idx} Falha:[/red] {msg}")
-        return None
+        return url.strip()
 
 
 def process_batch(urls: list[str], fmt: str | None = None,
@@ -374,11 +373,14 @@ def process_batch(urls: list[str], fmt: str | None = None,
                                     cookies_file, max_wait, pace, progress)
                         for i, u in enumerate(urls, start=1)]
                 results = [f.result() for f in futs]
-        ok = sum(1 for r in results if r is not None)
-        fail = total - ok
+        failed_urls = [r for r in results if isinstance(r, str)]
+        ok = total - len(failed_urls)
+        fail = len(failed_urls)
     else:
-        http = Http(new_session(cookies_file))
-        pace = None
+        # Pacer também no serial: espaça as requisições entre livros para
+        # não ativar o limite de geração de links por IP do welib.
+        http = Http(new_session(cookies_file), pacer=RatePacer(2.5))
+        failed_urls: list[str] = []
 
         def pre(u: str):
             return get_book_info(normalize_book_url(u), http)
@@ -411,6 +413,7 @@ def process_batch(urls: list[str], fmt: str | None = None,
                             msg2 = str(e2) or type(e2).__name__
                             print(f"[!] Falha em {safe[:80]}: {msg2}", file=sys.stderr)
                             fail += 1
+                            failed_urls.append(safe)
                             if i < total:
                                 next_fut = pool.submit(pre, urls[i].strip())
                             continue
@@ -427,6 +430,7 @@ def process_batch(urls: list[str], fmt: str | None = None,
                         msg = str(e) or type(e).__name__
                         print(f"[!] Falha: {msg}", file=sys.stderr)
                         fail += 1
+                        failed_urls.append(safe)
                     if next_fut is not None:
                         fut = next_fut
                     if http.challenges > challenges_before:
@@ -436,6 +440,10 @@ def process_batch(urls: list[str], fmt: str | None = None,
             print("\n[!] Lote interrompido pelo usuário.", file=sys.stderr)
 
     print(f"[+] Resumo: {ok} baixado(s) com sucesso, {fail} falha(s) de {total}.")
+    if fail:
+        print("[!] Para tentar de novo, rerode só com estes links:")
+        for fu in failed_urls:
+            print(f"    {fu}")
     return ok, fail
 
 

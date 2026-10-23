@@ -147,6 +147,12 @@ automáticos com barra **⏳ Aguardando liberação...** (5s → 45s) e vai
 re-resolvendo tudo até liberar — ou até esgotar `--max-wait` (300s por
 padrão). Nada de rerodar na mão; deixe o terminal aberto.
 
+No fim de um lote, os links que falharam aparecem no resumo — cole-os de
+novo num `.txt` e rerode só eles. Todos os modos usam um `RatePacer`
+(espaçamento entre requisições) para não ativar o limite de geração de
+links por IP do welib. Ainda assim, welib às vezes guarda o link e só
+solta depois de alguns minutos — a paciência costuma resolver.
+
 ## Downloads em paralelo (v0.4)
 
 ```
