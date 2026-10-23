@@ -1,4 +1,4 @@
-"""Download de arquivos com barra de progresso (rich)."""
+"""Download de arquivos com barra de progresso (rich, compartilhável)."""
 
 from __future__ import annotations
 
@@ -26,6 +26,8 @@ BROWSER_HEADERS = {
     "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
     "Referer": "https://welib.org/",
 }
+
+CHUNK_SIZE = 1024 * 64
 
 
 def get_downloads_dir() -> Path:
@@ -81,7 +83,9 @@ def filename_for(title: str, fmt: str, url: str) -> str:
     ext = fmt.lower().lstrip(".")
     parsed = urlparse(url)
     base = os.path.basename(unquote(parsed.path))
-    if base and "." in base and len(base) < 120 and re.search(r"\.(pdf|epub|mobi|azw3|djvu|fb2|txt|docx?|cbr|cbz)$", base, re.I):
+    if base and re.search(
+        r"\.(pdf|epub|mobi|azw3|djvu|fb2|txt|docx?|cbr|cbz)$", base, re.I
+    ) and len(base) < 150:
         return sanitize_filename(base)
     return sanitize_filename(f"{title}.{ext}")
 
@@ -100,13 +104,14 @@ def _filename_from_response(resp, fallback: str, first_chunk: bytes | None = Non
     cd = resp.headers.get("Content-Disposition", "")
     m = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', cd)
     if m:
-        cand = _fix_mojibake(unquote(m.group(1)))
-        cand = sanitize_filename(cand)
+        cand = sanitize_filename(_fix_mojibake(unquote(m.group(1))))
         if cand and "." in cand:
             return cand
     parsed = urlparse(str(resp.url))
     base = os.path.basename(unquote(parsed.path))
-    if base and re.search(r"\.(pdf|epub|mobi|azw3|djvu|fb2|txt|docx?|cbr|cbz)$", base, re.I) and len(base) < 150:
+    if base and re.search(
+        r"\.(pdf|epub|mobi|azw3|djvu|fb2|txt|docx?|cbr|cbz)$", base, re.I
+    ) and len(base) < 150:
         return sanitize_filename(_fix_mojibake(base))
     if first_chunk:
         ext = sniff_ext(first_chunk)
@@ -118,7 +123,7 @@ def _filename_from_response(resp, fallback: str, first_chunk: bytes | None = Non
 
 def _final_path(dest: Path, final_name: str) -> Path:
     final_dest = dest.parent / final_name
-    if final_dest.exists() and final_dest != dest:
+    if final_dest.exists():
         stem, suffix = final_dest.stem, final_dest.suffix
         i = 1
         while (dest.parent / f"{stem} ({i}){suffix}").exists():
@@ -127,58 +132,22 @@ def _final_path(dest: Path, final_name: str) -> Path:
     return final_dest
 
 
-def _stream_to_file(resp, first_chunk: bytes, dest: Path, downloaded: int = 0) -> Path:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    total = int(resp.headers.get("Content-Length", 0) or 0) + downloaded
-    final_dest = _final_path(dest, _filename_from_response(resp, dest.name, first_chunk))
-    existed_before = final_dest.exists()
-    with Progress(
-        "[progress.description]{task.description}",
-        BarColumn(),
-        TaskProgressColumn(),
-        DownloadColumn(),
-        TransferSpeedColumn(),
-        TimeRemainingColumn(),
-    ) as progress:
-        task = progress.add_task(f"[cyan]Baixando {final_dest.name}", total=total or None)
-        try:
-            with open(final_dest, "wb") as f:
-                if first_chunk:
-                    f.write(first_chunk)
-                    downloaded += len(first_chunk)
-                    progress.update(task, completed=downloaded)
-                for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
-                    if not chunk:
-                        continue
-                    f.write(chunk)
-                    progress.update(task, advance=len(chunk))
-            if downloaded == 0:
-                raise RuntimeError("Arquivo vazio do servidor.")
-            return final_dest
-        except Exception:
-            if not existed_before and final_dest.exists():
-                try:
-                    final_dest.unlink()
-                except OSError:
-                    pass
-            raise
-
-
-CHUNK_SIZE = 1024 * 64
-
-
 def download_file(url: str, dest: Path, referer: str | None = None, timeout: int = 60,
-                  session=None) -> Path:
-    """Baixa `url` para `dest` com barra de progresso. Valida não-HTML antes de salvar."""
+                  session=None, progress=None, task=None) -> Path:
+    """Baixa `url` para `dest` com barra de progresso (compartilhável).
+
+    Validções: HTTP 401/403/404 e conteúdo HTML → RuntimeError, nada é salvo.
+    """
     headers = dict(BROWSER_HEADERS)
     if referer:
         headers["Referer"] = referer
     opener = (session or requests).get
     resp = opener(url, headers=headers, stream=True, timeout=timeout, allow_redirects=True)
-    return _validate_and_stream(resp, dest)
+    return _validate_and_stream(resp, dest, progress=progress, task=task)
 
 
-def _validate_and_stream(resp, dest: Path) -> Path:
+def _validate_and_stream(resp, dest: Path, progress=None, task=None) -> Path:
+
     try:
         if resp.status_code in (401, 403):
             raise RuntimeError(
@@ -194,22 +163,86 @@ def _validate_and_stream(resp, dest: Path) -> Path:
                 "O servidor devolveu uma página HTML em vez do arquivo do livro "
                 f"(Content-Type: {resp.headers.get('Content-Type')}). Nada foi salvo."
             )
-        auto_iter = resp.iter_content(CHUNK_SIZE)
-        first = next(auto_iter, b"")
+        first = next(resp.iter_content(CHUNK_SIZE), b"")
         if not first:
             raise RuntimeError("Servidor devolveu arquivo vazio.")
         if _looks_like_html(first):
             raise RuntimeError(
-                "O servidor devolveu uma página HTML em vez do arquivo do livro. Nada foi salvo."
+                "O servidor devolveu uma página HTML em vez do arquivo do OCR. Nada foi salvo."
             )
-        return _stream_to_file(resp, first, dest)
+        return _stream_to_file(resp, first, dest, progress=progress, task=task)
     finally:
-        pass
+        try:
+            resp.close()
+        except Exception:
+            pass
 
 
-def download_response(resp, first_chunk: bytes, dest: Path) -> Path:
+def download_response(resp, first_chunk: bytes, dest: Path, progress=None, task=None) -> Path:
     """Continua a partir de uma resposta já aberta (o IPFS race ganha aqui)."""
     if _looks_like_html(first_chunk):
         resp.close()
         raise RuntimeError("Gateway IPFS devolveu HTML; gateway bloqueado.")
-    return _stream_to_file(resp, first_chunk, dest)
+    return _stream_to_file(resp, first_chunk, dest, progress=progress, task=task)
+
+
+def _stream_to_file(resp, first_chunk: bytes, dest: Path,
+                    progress=None, task=None) -> Path:
+    """Grava a resposta (streaming) em dest com barra de progresso.
+
+    progress=None → cria a própria barra. Com progress compartilhado (modo
+    paralelo), registra task própria nele.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    total = int(resp.headers.get("Content-Length", 0) or 0)
+    final_dest = _final_path(dest, _filename_from_response(resp, dest.name, first_chunk))
+    existed_before = final_dest.exists()
+    desc = f"[cyan]Baixando {final_dest.name}"
+
+    own = progress is None
+    if own:
+        progress = Progress(
+            "[progress.description]{task.description}",
+            BarColumn(),
+            TaskProgressColumn(),
+            DownloadColumn(),
+            TransferSpeedColumn(),
+            TimeRemainingColumn(),
+        )
+
+    def _cleanup():
+        if not existed_before and final_dest.exists():
+            try:
+                final_dest.unlink()
+            except OSError:
+                pass
+
+    try:
+        written = 0
+        if own:
+            progress.start()
+        try:
+            if task is None:
+                task = progress.add_task(desc, total=total or None)
+            else:
+                progress.update(task, total=total or None, description=desc)
+            with open(final_dest, "wb") as f:
+                if first_chunk:
+                    f.write(first_chunk)
+                    written += len(first_chunk)
+                    progress.update(task, completed=written)
+                for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    written += len(chunk)
+                    progress.update(task, advance=len(chunk))
+            if written == 0:
+                raise RuntimeError("Arquivo vazio do servidor.")
+            return final_dest
+        finally:
+            if own:
+                progress.stop()
+    except Exception:
+        _cleanup()
+        raise

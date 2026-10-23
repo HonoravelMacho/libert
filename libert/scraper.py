@@ -153,13 +153,44 @@ class BookInfo:
     extra: dict = field(default_factory=dict)
 
 
+class RatePacer:
+    """Ambiente compartilhado: garante intervalo mínimo entre requisições ao welib."""
+
+    def __init__(self, min_interval: float = 3.0):
+        self.min_interval = min_interval
+        self._last = 0.0
+        self._lock = None
+        try:
+            import threading
+
+            self._lock = threading.Lock()
+        except Exception:
+            self._lock = None
+
+    def wait(self):
+        if self._lock is None:
+            delta = max(0.0, self.min_interval - (time.time() - self._last))
+            if delta:
+                time.sleep(delta)
+            self._last = time.time()
+            return
+        with self._lock:
+            delta = max(0.0, self.min_interval - (time.time() - self._last))
+            if delta:
+                time.sleep(delta)
+            self._last = time.time()
+
+
 class Http:
     """GET com retry curto em challenge, trocando de espelho quando bloqueado."""
 
-    def __init__(self, session, status_cb=None):
+    def __init__(self, session, status_cb=None, pacer: RatePacer | None = None,
+                 tries: int = 4):
         self.s = session
         self.status_cb = status_cb
         self.challenges = 0
+        self.pacer = pacer
+        self.tries = tries
         self._lock = None
         try:
             import threading
@@ -172,11 +203,15 @@ class Http:
         if self.status_cb:
             self.status_cb(msg)
 
-    def get(self, url: str, tries: int = 4, timeout: int = 30, referer: str | None = None, **kw):
+    def get(self, url: str, tries: int | None = None, timeout: int = 30,
+            referer: str | None = None, **kw):
+        tries = tries or self.tries
         host = urlparse(url).netloc.lower()
         parsed = urlparse(url)
         last: str = ""
         for attempt in range(tries):
+            if self.pacer and attempt >= 0:
+                self.pacer.wait()
             try:
                 if self._lock:
                     with self._lock:

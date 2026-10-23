@@ -125,8 +125,38 @@ Linhas vazias e `#` são ignoradas; texto extra antes da URL é aceito.
 
 ```
 libert [-f FORMATO] [-o PASTA] [-l ARQUIVO.txt] [URL]
+libert [-l links.txt] --jobs 3
+libert [-l links.txt] --cookies cookies.txt --max-wait 600
 libert -V
 ```
+
+| Flag | Para que serve |
+|---|---|
+| `-f, --format` | Formato desejado (pdf, epub, mobi...) — pula a pergunta interativa |
+| `-l, --list` | Arquivo `.txt` com URLs (uma por linha) |
+| `-o, --output-dir` | Pasta de destino (padrão: `~/Downloads`) |
+| `--cookies` | Cookie jar do navegador — vence Cloudflare no Termux |
+| `--jobs N` | lote em paralelo: N livros de uma vez (2–3 é o ponto seguro) |
+| `-w, --max-wait SEG` | paciência ante rate-limit/Cloudflare (padrão 300s; `0` = desiste já) |
+| `-V` | versão |
+
+## Paciência automática (v0.4)
+
+Travou no welib/Cloudflare? O libert não desiste: entra em ciclos
+automáticos com barra **⏳ Aguardando liberação...** (5s → 45s) e vai
+re-resolvendo tudo até liberar — ou até esgotar `--max-wait` (300s por
+padrão). Nada de rerodar na mão; deixe o terminal aberto.
+
+## Downloads em paralelo (v0.4)
+
+```
+libert -l links.txt --jobs 3
+```
+
+Uma única barra com um arquivo por linha; enquanto um baixa, os outros
+resolvem. Um `RatePacer` compartilhado mantém as requisições ao welib
+bem-comportadas (nada de ban). Sem `--jobs`, o lote serial continua com
+pipeline: o próximo livro já está sendo resolvido enquanto o atual baixa.
 
 ## Notas
 

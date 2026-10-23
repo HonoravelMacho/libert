@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "libert"
-version = "0.3.1"
+version = "0.4.0"
 description = "CLI instantânea para download de livros do welib (yt-dlp de livros)"
 readme = "README.md"
 requires-python = ">=3.9"
