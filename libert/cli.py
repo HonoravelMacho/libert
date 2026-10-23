@@ -37,7 +37,7 @@ from rich.progress import (
 )
 
 from libert import __version__
-from libert.downloader import download_file, download_response, filename_for, get_downloads_dir
+from libert.downloader import download_file, download_response, filename_for
 from libert.ipfs import race as ipfs_race
 from libert.scraper import (
     BookInfo,
@@ -63,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-l", "--list", dest="list_file", default=None, metavar="ARQUIVO.txt",
                    help="Arquivo .txt com lista de URLs (uma por linha).")
     p.add_argument("-o", "--output-dir", dest="output_dir", default=None,
-                   help="Pasta de destino (padrão: ~/Downloads).")
+                   help="Pasta de destino (padrão: a pasta atual; use -o ~/Downloads no Termux).")
     p.add_argument("-V", "--version", action="store_true", help="Mostra a versão e sai.")
     p.add_argument("--cookies", dest="cookies", default=None, metavar="cookies.txt",
                    help="Cookie jar (Netscape ou nome=valor) do navegador com sessão "
@@ -298,7 +298,7 @@ def download_single(url: str, fmt: str | None = None,
     url = url.strip()
     if not is_valid_url(url):
         raise ValueError(f"URL inválida: {url!r}. Esperado algo como: https://pt.welib.st/md5/<hash>")
-    out_dir = Path(output_dir).expanduser() if output_dir else get_downloads_dir()
+    out_dir = Path(output_dir).expanduser() if output_dir else Path(".")
     out_dir.mkdir(parents=True, exist_ok=True)
     http = Http(new_session(cookies_file))
     warmup(http, normalize_book_url(url))
@@ -353,7 +353,7 @@ def process_batch(urls: list[str], fmt: str | None = None,
                   cookies_file: str | None = None,
                   jobs: int = 1, max_wait: int = 300) -> tuple[int, int]:
     total = len(urls)
-    out_dir = Path(output_dir).expanduser() if output_dir else get_downloads_dir()
+    out_dir = Path(output_dir).expanduser() if output_dir else Path(".")
     out_dir.mkdir(parents=True, exist_ok=True)
     ok = 0
     fail = 0

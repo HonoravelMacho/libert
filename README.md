@@ -81,7 +81,9 @@ Extras de robustez:
 - URLs de download coladas direto (`.../slow_download/<md5>/...`) viram
   página do livro automaticamente.
 - Espelhos automáticos (`welib.org`, `welib.st`, `pt/en/es.welib.st`).
-- Arquivos salvos em `~/Downloads` (Linux) ou `~/storage/downloads` (Termux);
+- Arquivos salvos **na pasta em que o terminal está aberto** (a menos que
+  você aponte `-o`); no Termux prefira `-o ~/storage/downloads` para ver
+  os arquivos no celular;
   nunca sobrescreve (adiciona ` (1)`, ` (2)`…).
 - Barra de progresso com tamanho, % e velocidade.
 
@@ -105,7 +107,7 @@ Escolha uma opção (0-3):
 [+] Livro: "Nome do Livro"
 [+] Link direto do arquivo resolvido.
                      Baixando Nome do Livro.pdf ━━━━━ 100% ...
-[+] Concluído em 6.4s → ~/Downloads/Nome do Livro.pdf
+[+] Concluído em 6.4s → ./Nome do Livro.pdf
 [2/3] https://pt.welib.st/md5/bbb...
 ...
 [+] Resumo: 3 baixado(s) com sucesso, 0 falha(s) de 3.
@@ -134,7 +136,7 @@ libert -V
 |---|---|
 | `-f, --format` | Formato desejado (pdf, epub, mobi...) — pula a pergunta interativa |
 | `-l, --list` | Arquivo `.txt` com URLs (uma por linha) |
-| `-o, --output-dir` | Pasta de destino (padrão: `~/Downloads`) |
+| `-o, --output-dir` | Pasta de destino (padrão: pasta atual; no Termux use `-o ~/storage/downloads`) |
 | `--cookies` | Cookie jar do navegador — vence Cloudflare no Termux |
 | `--jobs N` | lote em paralelo: N livros de uma vez (2–3 é o ponto seguro) |
 | `-w, --max-wait SEG` | paciência ante rate-limit/Cloudflare (padrão 300s; `0` = desiste já) |
